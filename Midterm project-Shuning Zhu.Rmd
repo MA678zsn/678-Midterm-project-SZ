@@ -1,0 +1,352 @@
+---
+title: "MA678 Midterm Project Report"
+author: "Shuning Zhu"
+date: "11/10/2021"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+library(readr)
+library(tidyverse)
+library(stringr)
+library(rstanarm)
+library(knitr)
+library(magrittr)
+library(kableExtra)
+library(gridExtra)
+library(tidytext)
+library(lubridate)
+library(car) 
+library(gvlma)
+library(lme4)
+library(arm)
+library(lmerTest)
+library(lattice)
+library(Hmisc)
+library(ggalluvial)
+library(lmtest)
+library(cluster)   
+library(factoextra)
+library(ggfortify)
+
+```
+
+
+```{r, include=FALSE}
+#input data
+cars<-read.csv('USA_cars_datasets.csv')
+cars%<>%filter(cars$title_status=='clean vehicle')
+cars%<>%filter(cars$country==' usa')
+cars<-cars[,c(-1,-6,-9,-10,-12,-13)]
+cars<-cars[cars$price!=0&cars$mileage!=0,]
+cars[cars$year<2011,4]<-2010
+cars %<>% filter(state!="arkansas" & state!="kansas" & state!="nebraska" & state!="new hampshire" & state!="new mexico" & state!="rhode island" & state!="utah" & state!="vermont"&state!="kentucky"&brand!='jaguar'&brand!='hyundai'&brand!='heartland'&brand!='harley-davidson')
+cars<-cars[-which(cars$price==max(cars$price[cars$brand=='honda'])&cars$brand=='honda'),]
+cars<-cars[-which(cars$price==max(cars$price[cars$brand=='honda'])&cars$brand=='honda'),]
+#cars<-cars[-which(cars$price==max(cars$price[cars$brand=='honda'])&cars$brand=='honda'),]
+```
+
+
+
+
+
+
+
+## Abstract
+
+Nowadays everyone has access to cars' price data and it has been a common sense that the price decreases with higher mileage but the extent to which the price of a car varies with mileage is affected by many factors such as region, brand and year, etc. It rises a question: if you decide to buy a car under a specific brand and have some other information about that car, how can you determine if the car is good value in relation to the market? This report use more than 2000 records of cars from 25 popular brands and 30 States sold in the U.S, build a multilevel linear model to compare different impact the mileage has on price from brand to brand. This report are consisted 5 main parts: Introduction, Method, Result and Discussion.
+
+
+
+
+## Introduction
+
+The automotive industry in the United States began in the 1890s and, as a result of the size of the domestic market and the use of mass production, rapidly evolved into the largest in the world. Now many people think that Asian brand cars(especially Japanese brand cars) depreciate more than European brand cars(especially Germany brand cars), and European brand cars depreciate more than American brand cars. It sounds reasonable but I think it's a too rough conclusion to compare the impact mileage has on cars' price from country to country, so this report is going to further divide cars into different brands and compare the effects of mileage.
+
+## Method
+
+
+
+### Data Wrangling
+
+The main data set is published on [Kaggle: US Cars](https://www.kaggle.com/doaaalsenani/usa-cers-dataset). The original dataset has 12 columns and 2500 rows. After removing variables which would not be used in my analysis the dataset has 7 columns left. Below are descriptions of each columns in the remaining dataset:
+
+| column names      | type         |description |
+| :--:              | :--          |:-----        |
+| price             | integer      |The sale price of the vehicle|
+| brand             | string       |The brand of car |
+| model             | string       |Model of the vehicle |
+| year              | integer      |The vehicle registration year |
+| mileage           | float        |The number of views |
+| color             | string       |Color of the vehicle|
+| state             | string       |The location in which the car is being available for purchase|
+
+
+After removing unused columns in the dataset I removed outliers after applying log transformation to variable 'mileage' and 'price' to make the data more consistent with the model's assumptions: normality and homoscedasticity. Below are boxplots comparing the distribution of data before and after removing outliers:
+```{r, echo=FALSE, fig.height=4, fig.width= 10,fig.cap="Distribution of log(mileage) and log(price) before and after removing outliers "}
+Q <- quantile(log(cars$price), probs=c(.25, .75), na.rm = T)
+iqr <- IQR(log(cars$price), na.rm = T)
+df2 <- cars %>% filter(log(price) > (Q[1] - 1.5*iqr) & 
+                       log(price) < (Q[2] + 1.5*iqr))  
+
+# visualize the new dataset without outliers
+par(mfrow=c(2,2))
+options(repr.plot.width=12, repr.plot.height=6)
+boxplot(log(cars$price), col = "grey40", horizontal = T, 
+        main = "Price - Before Removing Outliers")
+boxplot(log(df2$price), col = "thistle2", horizontal = T, 
+        main = "Price - After Removing Outliers")
+
+Q <- quantile(log(df2$mileage), probs=c(.25, .75), na.rm = T)
+iqr <- IQR(log(df2$mileage), na.rm = T)
+df3 <- df2%>% filter(log(mileage) > (Q[1] - 1.5*iqr) & 
+                       log(mileage) < (Q[2] + 1.5*iqr))  
+
+# visualize the new dataset without outliers
+
+options(repr.plot.width=12, repr.plot.height=6)
+boxplot(log(df2$mileage), col = "grey40", horizontal = T, 
+        main = "Mileage - Before Removing Outliers")
+boxplot(log(df3$mileage), col = "thistle2", horizontal = T, 
+        main = "Mileage - After Removing Outliers")
+
+```
+
+
+
+### EDA
+```{r, echo=FALSE, fig.height=5, fig.width= 15,fig.cap="Count of cars from each brand in the dataset"}
+
+plot1<-cars%>%group_by(brand)%>%summarise(count=n())%>%mutate(brand= fct_reorder(brand,count))%>%ggplot(aes(x=brand,y=count, fill = brand)) + geom_bar(stat="identity")+theme(legend.position ='none')+theme(axis.text.x = element_text(angle = 70, hjust = 1, vjust = 1,size = rel(1.6)))
+# plot2<-cars%>%group_by(state)%>%ggplot(aes(y=state, fill = state)) + geom_bar(stat="count")+theme(legend.position ='none')
+# plot3<-cars%>%group_by(model)%>%ggplot(aes(y=model, fill = model)) + geom_bar(stat="count")+theme(legend.position='none')+theme(axis.text.y=element_text(size=5))
+# grid.arrange(plot1, plot2, ncol=2)
+plot1
+```
+
+First, above is the barplot showing count for each brand car in the dataset. Some brands like chevrolet, dodge, ford have more than 200 records which is enough for fitting regression lines seperately. But there are also some other brands like jagular, lincoln which have only less than 10 records. This makes me think about using partial pooling to do regression analysis.
+
+
+
+```{r, echo=FALSE, fig.height=6, fig.width= 10,fig.cap="The relationship between car's mileage and price for each brand"}
+
+
+
+cars%>%ggplot(aes(x = mileage, y = price, color = as.factor(brand)))+ geom_point(size=0.5)+stat_smooth(method = lm,se=F)+labs(title = "Milage VS Price for each brand" )+theme(axis.text.x = element_blank())+theme(axis.ticks.x = element_blank())+ coord_cartesian(ylim = c(0, 75000)) +facet_wrap(~brand)+theme(legend.position = 'none')
+# cars%>%ggplot(aes(x = mileage, y = price, color = mileage))+ geom_point()+stat_smooth(method = lm)+labs(title = "Milage VS Price for each state" )+facet_wrap(~state)+theme(axis.text.x = element_blank())+theme(axis.ticks.x = element_blank())+ coord_cartesian(ylim = c(0, 75000))
+```
+Then I fit regression line for each brand and it shows that the intercept and slope of different brand are very different since some brands' slope are even positive. It naturally comes to my mind that it's reasonable to use a multilevel model to compare the different impact mileage has on price for each brand.
+
+
+### Variable Selection
+
+
+
+I list a larger set of all potential predictors based on the dataset structure and my EDA. Then picking out the subset of significant predictors which are mileage, interaction of mileage and year and state using backard selection method. Then I have variables to estimate the fixed effects. After combining the discovery in EDA, here is the expression of the initial multilevel linear model in R:
+```{r,eval=FALSE}
+lmer(log(price)~log(mileage)+state+log(mileage):factor(year)+(1+log(mileage)|brand),cars)
+```
+
+
+
+
+### Model Fitting
+
+Below are part of fixed effects, all variables are significant at alpha = 0.05 level:
+
+
+|                |Estimate   |Std. Error  |
+|:---:           |:---:      |:---:       |
+|(Intercept)     |12.02     |0.63        |
+|log_mileage    |-0.28      |0.05        |
+|log_mileage$\times$year2011       |0.04       |0.01        |
+|state_arizona     |-0.48       |0.15        |
+
+In the table above, the baseline of comparing state effects is state_alabama, the baseline of comparing log_mileage*year is year 2010. The complete fixed effects estimates can be found in the appendix.
+
+```{r include=FALSE}
+model1<-lmer(log(price)~log(mileage)+state+log(mileage):factor(year)+(1+log(mileage)|brand),data = cars)
+```
+
+## Result
+
+### Coefficient Values
+
+The table below show part of brands' coefficients and the complete results are available in the appendix.
+
+
+
+|                        |(Intercept) |log_mileage |
+|:---:                   |:---:       |:---:        |
+|bmw           |14.08      |-0.44         |
+|mercedes-benz         |14.29      |-0.45         |
+|audi         |13.66      |-0.39         |
+|ford    |10.96      |-0.17         |
+|kia           |10.71      |-0.19        |
+|honda         |8.24      |-0.01        |
+|nissan         |9.44      |-0.08         |
+
+Just take one example here, for an Audi car from Alabama with mileage x registered in 2010, we can conclude this formula: 
+
+$$log(price)= 13.66 -0.39\cdot log(mileage\ x) $$
+From this formula we can say for an Audi car registered in 2010 from Alabama, each 1% difference in mileage, the predicted difference in price is 0.39%.
+
+The intercept and coefficient before log_mileage are different from brand to brand. I use a line chart lower-left to show the relationship between the brand's average price and coefficient before log_mileage, it appears to be a increasing trend for the depreciation speed with the growth of brand's average price:
+
+
+```{r, echo=FALSE, fig.height=4, fig.width= 10,fig.cap="Clustering based on the brand average price and impact mileage has on price"}
+co<-as.data.frame(coef(model1)[[1]])
+a<-cbind(coefficient=co$`log(mileage)`,brand=rownames(co))
+a<-as.data.frame(a)
+a[,1]<-as.numeric(a[,1])
+b<-cars%>%group_by(brand)%>%summarise(average_price=mean(price))
+c<-cbind(b,a[,1])
+
+
+names(c)[names(c)=='a[, 1]']<-'coefficient'
+c[,2]<-scale(c[,2])
+c[,3]<-scale(c[,3])
+d<-as.matrix(c[,-1])
+k2 <- kmeans(d, centers = 4, nstart = 25)
+plot3<-ggplot(data=c, aes(x=average_price, y=coefficient, group=1)) +geom_line()
+plot4<-d %>%
+  as_tibble() %>%
+  mutate(cluster = k2$cluster,
+         brand = a$brand) %>%
+  ggplot(aes(average_price, coefficient, color = factor(cluster), label = a$brand)) +
+  geom_text()+theme(legend.position = 'none')
+
+grid.arrange(plot3,plot4,ncol=2)
+```
+
+
+If we do clustering based on the average price and coefficient like the plot at right, we can more clearly find out that most luxury car brands like Benz, BMW, Audi are in the same group which is high depreciation and high price. And some economy car brands mostly from Japan like Nissan and Honda are in the low depreciation and low price group. These results generally indicate that the degree of depreciation of a vehicle with mileage is positively correlated with the degree of luxury of the brand, not exactly with where the brand come from(examples like Lexus prove this point).
+
+
+### Model Validation
+
+Available in the appendix.
+
+
+
+## Discussion
+
+
+
+
+The estimates seem reasonable in some extents. The higher the mileage, the lower the car's price, different states also have significant effects on the price of a car. Moreover, the interaction of registration year and mileage also have a significant effect on the car price. This seems hard to explain. But if we look into some real cases in our life we will find out that the intensity of usage(which means the average usage per specific time period) significantly affects the car price. People are often unwilling to buy a car that runs more than 100,000 miles in just one year because it means that the car will have a higher accident rate and wear and tear.
+
+Another counter-intuitive finding is that the impact of mileage on the car price is not obviously related to the manufacturer's country, but it is related to the average price of the brand change, i.e. the level of luxury. So it's not exactly to say a Japanese car depreciates less than an American car, one typical example of that is Lexus vs Ford, Ford's price is more robust than Lexus's price in U.S.   
+
+The multilevel linear model I build successfully compares the impact mileage has on the car price from different brands but the limitation is that the proportion of price's variation explained by my model is limited. So it may be inappropriate to use this model to do precise predictions. The dataset itself is not that large and I only include 3 predictors into my model, this determines the model does not have enough power to do prediction precisely. I will try to find more data and consider more variables to give the model more power to do better predictions.
+
+To fight depreciation, my model says that the biggest thing an owner can do is not put on a lot of miles within a short time period. But “Ultimately, the value is predicated on the market,” concedes Dixon a car dealer. And those factors are always in flux.
+
+My recommendation for choosing a car brand? Focus on choosing the vehicle that’s right for you .
+
+
+
+
+
+
+
+
+
+
+
+## Citation
+
+UC Business Analytics R Programming Guide
+https://uc-r.github.io/kmeans_clustering
+
+How car depreciation affects your vehicle’s value
+https://www.creditkarma.com/auto/i/how-car-depreciation-affects-value
+
+Getting Started with Mixed Effect Models in R
+https://www.jaredknowles.com/journal/2013/11/25/getting-started-with-mixed-effect-models-in-r
+
+Exploring interactions with continuous predictors in regression models
+https://cran.r-project.org/web/packages/interactions/vignettes/interactions.html
+
+Illowsky, B., & Dean, S. (2021, November 26). Outliers. De Anza College
+https://stats.libretexts.org/@go/page/802
+
+            
+
+\newpage
+## Appendix
+```{r, echo=FALSE}
+# cor(cars[,c(1,4,5)])
+# plot(cars$year,cars$mileage)
+# cars%>%group_by(brand)%>%summarise(mean(price))
+# cars%>%group_by(state)%>%summarise(mean(price),count=n())
+# cars%>%group_by(brand,state)%>%summarise(mean(price))
+```
+```{r, echo=FALSE, fig.height=4, fig.width= 10}
+# cars %<>% filter(brand=="ford" | brand=="dodge" | brand=="nissan" | brand=="chevrolet" | brand=="gmc" | brand=="jeep" | brand=="chrysler" | brand=="bmw" | brand=="hyundai" | brand=="buick")
+
+# table(cars$state)
+ # ggplot(cars, aes(x=state)) + geom_bar(aes(fill=brand), position="fill") +  coord_flip() +
+ # ggtitle("Most Popular Brands by State") + ylab("Percentage") + xlab("State")
+ 
+ 
+ 
+ 
+ # describe(cars$mileage)
+price_after_cut<-cut(cars$price,breaks = c(-Inf,11700,18000,26000,Inf),labels = c('low','medium low','medium high','high'))
+mileage_after_cut<-cut(cars$mileage,breaks = c(-Inf,20681,34023,54141,Inf),labels = c('low','medium low','medium high','high'))
+year_after_cut<-cut(cars$year,breaks = c(-Inf,2016.5,2018.5,Inf),labels = c('before 2017','2017-2018','2019'))
+price_after_cut<-factor(c(price_after_cut),levels=c('low','medium low','medium high','high'),labels=c('low','medium low','medium high','high'),ordered=TRUE)
+mileage_after_cut<-factor(c(mileage_after_cut),levels=c('high','medium high','medium low','low'),labels=c('high','medium high','medium low','low'),ordered=TRUE)
+year<-factor(cars$year)
+ap<-data_frame(price_after_cut,mileage_after_cut,cars$year,brand=cars$brand)
+ap1<-ap %>%
+  group_by(price_after_cut,mileage_after_cut,year=year_after_cut) %>%
+  summarise(count=n())
+ggplot(data = ap1,
+       aes(axis1 = mileage_after_cut, axis2=price_after_cut, y = count)) +
+  scale_x_discrete(limits = c("mileage", "price"), expand = c(.2, .05)) +
+  geom_alluvium(aes(fill = year)) +
+  geom_stratum() + geom_text(stat = "stratum", aes(label = after_stat(stratum))) +
+  theme_minimal()
+```
+```{r,echo=F}
+re <- plot(model1,ylim = c(-4,4))
+
+qq<-qqmath(model1,ylim=c(-9,9))
+
+grid.arrange(re,qq,ncol=2)
+```
+```{r, echo=FALSE, fig.height=4, fig.width= 10}
+lp<-ggplot(data.frame(lev=hatvalues(model1),pearson=residuals(model1,type="pearson")),
+      aes(x=lev,y=pearson)) +
+    geom_point() +
+    theme_bw()
+lp
+```
+
+
+```{r eval=FALSE}
+#display(model1)
+```
+
+```{r, include=FALSE}
+#EDA
+#unique(cars$title_status)
+#t.test(cars$price[cars$title_status=='clean vehicle'],cars$price[cars$title_status=='salvage insurance'])
+#unique(cars$state)
+
+```
+
+
+```{r}
+coef(model1)
+```
